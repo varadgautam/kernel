@@ -907,6 +907,9 @@ struct intel_spi *intel_spi_probe(struct device *dev,
 		return ERR_PTR(ret);
 	}
 
+	/* Ignore flash device FSR register */
+	ispi->nor.flags &= ~SNOR_F_USE_FSR;
+
 	intel_spi_fill_partition(ispi, &part);
 
 	/* Prevent writes if not explicitly enabled */
