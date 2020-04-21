@@ -139,7 +139,7 @@ static inline bool qdisc_is_running(struct Qdisc *qdisc)
 {
 	if (qdisc->flags & TCQ_F_NOLOCK)
 		return spin_is_locked(&qdisc->seqlock);
-#ifdef CONFIG_PREEMPT_RT_BASE
+#ifdef CONFIG_PREEMPT_RT
 	return spin_is_locked(&qdisc->running.lock) ? true : false;
 #else
 	return (raw_read_seqcount(&qdisc->running) & 1) ? true : false;
@@ -167,7 +167,7 @@ static inline bool qdisc_run_begin(struct Qdisc *qdisc)
 	} else if (qdisc_is_running(qdisc)) {
 		return false;
 	}
-#ifdef CONFIG_PREEMPT_RT_BASE
+#ifdef CONFIG_PREEMPT_RT
 	if (try_write_seqlock(&qdisc->running))
 		return true;
 	return false;
@@ -183,7 +183,7 @@ static inline bool qdisc_run_begin(struct Qdisc *qdisc)
 
 static inline void qdisc_run_end(struct Qdisc *qdisc)
 {
-#ifdef CONFIG_PREEMPT_RT_BASE
+#ifdef CONFIG_PREEMPT_RT
 	write_sequnlock(&qdisc->running);
 #else
 	write_seqcount_end(&qdisc->running);
@@ -333,7 +333,8 @@ struct tcf_proto_ops {
 					  void *type_data);
 	void			(*hw_del)(struct tcf_proto *tp,
 					  void *type_data);
-	void			(*bind_class)(void *, u32, unsigned long);
+	void			(*bind_class)(void *, u32, unsigned long,
+					      void *, unsigned long);
 	void *			(*tmplt_create)(struct net *net,
 						struct tcf_chain *chain,
 						struct nlattr **tca,

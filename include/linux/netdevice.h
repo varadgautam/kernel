@@ -72,6 +72,8 @@ void netdev_set_default_ethtool_ops(struct net_device *dev,
 #define NET_RX_SUCCESS		0	/* keep 'em coming, baby */
 #define NET_RX_DROP		1	/* packet dropped */
 
+#define MAX_NEST_DEV 8
+
 /*
  * Transmit return codes: transmit return codes originate from three different
  * namespaces:
@@ -423,13 +425,13 @@ typedef rx_handler_result_t rx_handler_func_t(struct sk_buff **pskb);
 void __napi_schedule(struct napi_struct *n);
 
 /*
- * When PREEMPT_RT_FULL is defined, all device interrupt handlers
+ * When PREEMPT_RT is defined, all device interrupt handlers
  * run as threads, and they can also be preempted (without PREEMPT_RT
  * interrupt threads can not be preempted). Which means that calling
  * __napi_schedule_irqoff() from an interrupt handler can be preempted
  * and can corrupt the napi->poll_list.
  */
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 #define __napi_schedule_irqoff(n) __napi_schedule(n)
 #else
 void __napi_schedule_irqoff(struct napi_struct *n);
@@ -4336,11 +4338,8 @@ void *netdev_lower_get_next(struct net_device *dev,
 	     ldev; \
 	     ldev = netdev_lower_get_next(dev, &(iter)))
 
-struct net_device *netdev_all_lower_get_next(struct net_device *dev,
+struct net_device *netdev_next_lower_dev_rcu(struct net_device *dev,
 					     struct list_head **iter);
-struct net_device *netdev_all_lower_get_next_rcu(struct net_device *dev,
-						 struct list_head **iter);
-
 int netdev_walk_all_lower_dev(struct net_device *dev,
 			      int (*fn)(struct net_device *lower_dev,
 					void *data),

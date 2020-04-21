@@ -20,9 +20,9 @@
 #include <linux/osq_lock.h>
 #endif
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 #include <linux/rwsem-rt.h>
-#else /* PREEMPT_RT_FULL */
+#else /* PREEMPT_RT */
 
 /*
  * For an uncontended rwsem, count and owner are the only fields a task
@@ -56,12 +56,6 @@ struct rw_semaphore {
 	struct lockdep_map	dep_map;
 #endif
 };
-
-/*
- * Setting all bits of the owner field except bit 0 will indicate
- * that the rwsem is writer-owned with an unknown owner.
- */
-#define RWSEM_OWNER_UNKNOWN	(-2L)
 
 /* In all implementations count != 0 means locked */
 static inline int rwsem_is_locked(struct rw_semaphore *sem)
@@ -125,7 +119,7 @@ static inline int rwsem_is_contended(struct rw_semaphore *sem)
 	return !list_empty(&sem->wait_list);
 }
 
-#endif /* !PREEMPT_RT_FULL */
+#endif /* !PREEMPT_RT */
 
 /*
  * The functions below are the same for all rwsem implementations including

@@ -98,7 +98,7 @@
 #define in_nmi()		(preempt_count() & NMI_MASK)
 #define in_task()		(!(preempt_count() & \
 				   (NMI_MASK | HARDIRQ_MASK | SOFTIRQ_OFFSET)))
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 
 #define softirq_count()		(current->softirq_count)
 #define in_softirq()		(softirq_count())
@@ -124,7 +124,7 @@
 /*
  * The preempt_count offset after spin_lock()
  */
-#if !defined(CONFIG_PREEMPT_RT_FULL)
+#if !defined(CONFIG_PREEMPT_RT)
 #define PREEMPT_LOCK_OFFSET	PREEMPT_DISABLE_OFFSET
 #else
 #define PREEMPT_LOCK_OFFSET	0
@@ -211,7 +211,7 @@ do { \
 	preempt_count_dec(); \
 } while (0)
 
-#ifdef CONFIG_PREEMPT_RT_BASE
+#ifdef CONFIG_PREEMPT_RT
 # define preempt_enable_no_resched() sched_preempt_enable_no_resched()
 # define preempt_check_resched_rt() preempt_check_resched()
 #else
@@ -219,16 +219,14 @@ do { \
 # define preempt_check_resched_rt() barrier();
 #endif
 
-#define preemptible()	(preempt_count() == 0 && !irqs_disabled())
-
-#if defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT_BASE)
+#if defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT)
 
 extern void migrate_disable(void);
 extern void migrate_enable(void);
 
 int __migrate_disabled(struct task_struct *p);
 
-#elif !defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT_BASE)
+#elif !defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT)
 
 extern void migrate_disable(void);
 extern void migrate_enable(void);
@@ -246,7 +244,9 @@ static inline int __migrate_disabled(struct task_struct *p)
 }
 #endif
 
-#ifdef CONFIG_PREEMPT
+#define preemptible()	(preempt_count() == 0 && !irqs_disabled())
+
+#ifdef CONFIG_PREEMPTION
 #define preempt_enable() \
 do { \
 	barrier(); \
@@ -274,7 +274,7 @@ do { \
 	preempt_check_resched(); \
 } while (0)
 
-#else /* !CONFIG_PREEMPT */
+ #else /* !CONFIG_PREEMPTION */
 #define preempt_enable() \
 do { \
 	barrier(); \
@@ -294,7 +294,7 @@ do { \
 } while (0)
 
 #define preempt_check_resched() do { } while (0)
-#endif /* CONFIG_PREEMPT */
+#endif /* CONFIG_PREEMPTION */
 
 #define preempt_disable_notrace() \
 do { \
@@ -357,7 +357,7 @@ do { \
 		set_preempt_need_resched(); \
 } while (0)
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 # define preempt_disable_rt()		preempt_disable()
 # define preempt_enable_rt()		preempt_enable()
 # define preempt_disable_nort()		barrier()

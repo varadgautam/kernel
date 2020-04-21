@@ -31,7 +31,7 @@ config OPROFILE
 	tristate "OProfile system profiling"
 	depends on PROFILING
 	depends on HAVE_OPROFILE
-	depends on !PREEMPT_RT_FULL
+	depends on !PREEMPT_RT
 	select RING_BUFFER
 	select RING_BUFFER_ALLOW_SWAP
 	help
@@ -107,7 +107,7 @@ config STATIC_KEYS_SELFTEST
 config OPTPROBES
 	def_bool y
 	depends on KPROBES && HAVE_OPTPROBES
-	select TASKS_RCU if PREEMPT
+	select TASKS_RCU if PREEMPTION
 
 config KPROBES_ON_FTRACE
 	def_bool y
@@ -388,9 +388,6 @@ config HAVE_ARCH_JUMP_LABEL_RELATIVE
 	bool
 
 config HAVE_RCU_TABLE_FREE
-	bool
-
-config HAVE_RCU_TABLE_NO_INVALIDATE
 	bool
 
 config HAVE_MMU_GATHER_PAGE_SIZE
@@ -798,6 +795,9 @@ config ARCH_NO_COHERENT_DMA_MMAP
 	bool
 
 config ARCH_NO_PREEMPT
+	bool
+
+config ARCH_SUPPORTS_RT
 	bool
 
 config CPU_NO_EFFICIENT_FFS

@@ -45,6 +45,7 @@
 #include "compression.h"
 #include "space-info.h"
 #include "delalloc-space.h"
+#include "block-group.h"
 
 #ifdef CONFIG_64BIT
 /* If we have a 32-bit userspace and 64-bit kernel, then the UAPI
@@ -3237,6 +3238,7 @@ static void btrfs_double_extent_lock(struct inode *inode1, u64 loff1,
 static int btrfs_extent_same_range(struct inode *src, u64 loff, u64 len,
 				   struct inode *dst, u64 dst_loff)
 {
+	const u64 bs = BTRFS_I(src)->root->fs_info->sb->s_blocksize;
 	int ret;
 
 	/*
@@ -3244,7 +3246,7 @@ static int btrfs_extent_same_range(struct inode *src, u64 loff, u64 len,
 	 * source range to serialize with relocation.
 	 */
 	btrfs_double_extent_lock(src, loff, dst, dst_loff, len);
-	ret = btrfs_clone(src, dst, loff, len, len, dst_loff, 1);
+	ret = btrfs_clone(src, dst, loff, len, ALIGN(len, bs), dst_loff, 1);
 	btrfs_double_extent_unlock(src, loff, dst, dst_loff, len);
 
 	return ret;
@@ -4971,7 +4973,7 @@ static long btrfs_ioctl_quota_rescan_status(struct file *file, void __user *arg)
 	if (!qsa)
 		return -ENOMEM;
 
-	if (fs_info->qgroup_flags & BTRFS_QGROUP_STATUS_FLAG_RESCAN) {
+	if (fs_info->qgroup_rescan_ready || fs_info->qgroup_rescan_running) {
 		qsa->flags = 1;
 		qsa->progress = fs_info->qgroup_rescan_progress.objectid;
 	}

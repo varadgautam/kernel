@@ -1252,7 +1252,7 @@ rcutorture_extend_mask(int oldmask, struct torture_random_state *trsp)
 	 * (regardless of RT), but until then don't stop testing
 	 * them on non-RT.
 	 */
-	if (IS_ENABLED(CONFIG_PREEMPT_RT_FULL)) {
+	if (IS_ENABLED(CONFIG_PREEMPT_RT)) {
 		/*
 		 * Can't release the outermost rcu lock in an irq disabled
 		 * section without preemption also being disabled, if irqs
@@ -1783,7 +1783,7 @@ static void rcu_torture_fwd_cb_cr(struct rcu_head *rhp)
 // Give the scheduler a chance, even on nohz_full CPUs.
 static void rcu_torture_fwd_prog_cond_resched(void)
 {
-	if (IS_ENABLED(CONFIG_PREEMPT) && IS_ENABLED(CONFIG_NO_HZ_FULL)) {
+	if (IS_ENABLED(CONFIG_PREEMPTION) && IS_ENABLED(CONFIG_NO_HZ_FULL)) {
 		if (need_resched())
 			schedule();
 	} else {

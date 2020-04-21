@@ -25,9 +25,11 @@
 #include <linux/resource.h>
 #include <linux/latencytop.h>
 #include <linux/sched/prio.h>
+#include <linux/sched/types.h>
 #include <linux/signal_types.h>
 #include <linux/mm_types_task.h>
 #include <linux/task_io_accounting.h>
+#include <linux/posix-timers.h>
 #include <linux/rseq.h>
 #include <asm/kmap_types.h>
 
@@ -250,27 +252,6 @@ struct prev_cputime {
 #endif
 };
 
-/**
- * struct task_cputime - collected CPU time counts
- * @utime:		time spent in user mode, in nanoseconds
- * @stime:		time spent in kernel mode, in nanoseconds
- * @sum_exec_runtime:	total time spent on the CPU, in nanoseconds
- *
- * This structure groups together three kinds of CPU time that are tracked for
- * threads and thread groups.  Most things considering CPU time want to group
- * these counts together and treat all three of them in parallel.
- */
-struct task_cputime {
-	u64				utime;
-	u64				stime;
-	unsigned long long		sum_exec_runtime;
-};
-
-/* Alternate field names when used on cache expirations: */
-#define virt_exp			utime
-#define prof_exp			stime
-#define sched_exp			sum_exec_runtime
-
 enum vtime_state {
 	/* Task is sleeping or running in a CPU with VTIME inactive: */
 	VTIME_INACTIVE = 0,
@@ -375,28 +356,30 @@ struct util_est {
 } __attribute__((__aligned__(sizeof(u64))));
 
 /*
- * The load_avg/util_avg accumulates an infinite geometric series
- * (see __update_load_avg() in kernel/sched/fair.c).
+ * The load/runnable/util_avg accumulates an infinite geometric series
+ * (see __update_load_avg_cfs_rq() in kernel/sched/pelt.c).
  *
  * [load_avg definition]
  *
  *   load_avg = runnable% * scale_load_down(load)
  *
- * where runnable% is the time ratio that a sched_entity is runnable.
- * For cfs_rq, it is the aggregated load_avg of all runnable and
- * blocked sched_entities.
+ * [runnable_avg definition]
+ *
+ *   runnable_avg = runnable% * SCHED_CAPACITY_SCALE
  *
  * [util_avg definition]
  *
  *   util_avg = running% * SCHED_CAPACITY_SCALE
  *
- * where running% is the time ratio that a sched_entity is running on
- * a CPU. For cfs_rq, it is the aggregated util_avg of all runnable
- * and blocked sched_entities.
+ * where runnable% is the time ratio that a sched_entity is runnable and
+ * running% the time ratio that a sched_entity is running.
  *
- * load_avg and util_avg don't direcly factor frequency scaling and CPU
- * capacity scaling. The scaling is done through the rq_clock_pelt that
- * is used for computing those signals (see update_rq_clock_pelt())
+ * For cfs_rq, they are the aggregated values of all runnable and blocked
+ * sched_entities.
+ *
+ * The load/runnable/util_avg doesn't direcly factor frequency scaling and CPU
+ * capacity scaling. The scaling is done through the rq_clock_pelt that is used
+ * for computing those signals (see update_rq_clock_pelt())
  *
  * N.B., the above ratios (runnable% and running%) themselves are in the
  * range of [0, 1]. To do fixed point arithmetics, we therefore scale them
@@ -420,11 +403,11 @@ struct util_est {
 struct sched_avg {
 	u64				last_update_time;
 	u64				load_sum;
-	u64				runnable_load_sum;
+	u64				runnable_sum;
 	u32				util_sum;
 	u32				period_contrib;
 	unsigned long			load_avg;
-	unsigned long			runnable_load_avg;
+	unsigned long			runnable_avg;
 	unsigned long			util_avg;
 	struct util_est			util_est;
 } ____cacheline_aligned;
@@ -468,7 +451,6 @@ struct sched_statistics {
 struct sched_entity {
 	/* For load-balancing: */
 	struct load_weight		load;
-	unsigned long			runnable_weight;
 	struct rb_node			run_node;
 	struct list_head		group_node;
 	unsigned int			on_rq;
@@ -489,6 +471,8 @@ struct sched_entity {
 	struct cfs_rq			*cfs_rq;
 	/* rq "owned" by this entity/group: */
 	struct cfs_rq			*my_q;
+	/* cached value of my_q->h_nr_running */
+	unsigned long			runnable_weight;
 #endif
 
 #ifdef CONFIG_SMP
@@ -727,18 +711,18 @@ struct task_struct {
 	int				nr_cpus_allowed;
 	const cpumask_t			*cpus_ptr;
 	cpumask_t			cpus_mask;
-#if defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT_BASE)
+#if defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT)
 	int				migrate_disable;
 	bool				migrate_disable_scheduled;
 # ifdef CONFIG_SCHED_DEBUG
 	int				pinned_on_cpu;
 # endif
-#elif !defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT_BASE)
+#elif !defined(CONFIG_SMP) && defined(CONFIG_PREEMPT_RT)
 # ifdef CONFIG_SCHED_DEBUG
 	int				migrate_disable;
 # endif
 #endif
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	int				sleeping_lock;
 #endif
 
@@ -904,13 +888,8 @@ struct task_struct {
 	unsigned long			min_flt;
 	unsigned long			maj_flt;
 
-#ifdef CONFIG_POSIX_TIMERS
-	struct task_cputime		cputime_expires;
-	struct list_head		cpu_timers[3];
-#ifdef CONFIG_PREEMPT_RT_BASE
-	struct task_struct		*posix_timer_list;
-#endif
-#endif
+	/* Empty if CONFIG_POSIX_CPUTIMERS=n */
+	struct posix_cputimers		posix_cputimers;
 
 	/* Process credentials: */
 
@@ -966,7 +945,7 @@ struct task_struct {
 	/* Restored if set_restore_sigmask() was used: */
 	sigset_t			saved_sigmask;
 	struct sigpending		pending;
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	/* TODO: move me into ->restart_block ? */
 	struct				kernel_siginfo forced_info;
 #endif
@@ -1027,7 +1006,7 @@ struct task_struct {
 	int				softirqs_enabled;
 	int				softirq_context;
 #endif
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	int				softirq_count;
 #endif
 
@@ -1293,10 +1272,10 @@ struct task_struct {
 	unsigned int			sequential_io;
 	unsigned int			sequential_io_avg;
 #endif
-#ifdef CONFIG_PREEMPT_RT_BASE
+#ifdef CONFIG_PREEMPT_RT
 	struct rcu_head			put_rcu;
 #endif
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 # if defined CONFIG_HIGHMEM || defined CONFIG_X86_32
 	int				kmap_idx;
 	pte_t				kmap_pte[KM_TYPE_NR];
@@ -1852,27 +1831,6 @@ static inline int need_resched_now(void)
 	return test_thread_flag(TIF_NEED_RESCHED);
 }
 
-/* Cpuset runqueue behavior modifier flags */
-enum
-{
-	RQ_TICK		= 1 << 0,
-	RQ_HPC		= 1 << 1,
-	RQ_HPCRT	= 1 << 2,
-	RQ_CLEAR	= ~0,
-};
-
-#ifdef CONFIG_HPC_CPUSETS
-extern int runqueue_is_flagged(int cpu, unsigned flag);
-extern int runqueue_is_isolated(int cpu);
-extern void cpuset_flags_set(int cpu, unsigned bits);
-extern void cpuset_flags_clr(int cpu, unsigned bits);
-#else /* !CONFIG_HPC_CPUSETS */
-static inline int runqueue_is_flagged(int cpu, unsigned flag) { return 0; }
-static inline int runqueue_is_isolated(int cpu) { return 0; }
-static inline void cpuset_flag_set(int cpu, unsigned bits) { }
-static inline void cpuset_flag_clr(int cpu, unsigned bits) { }
-#endif /* CONFIG_HPC_CPUSETS */
-
 #endif
 
 
@@ -1880,7 +1838,7 @@ static inline bool __task_is_stopped_or_traced(struct task_struct *task)
 {
 	if (task->state & (__TASK_STOPPED | __TASK_TRACED))
 		return true;
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	if (task->saved_state & (__TASK_STOPPED | __TASK_TRACED))
 		return true;
 #endif
@@ -1891,7 +1849,7 @@ static inline bool task_is_stopped_or_traced(struct task_struct *task)
 {
 	bool traced_stopped;
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&task->pi_lock, flags);
@@ -1909,7 +1867,7 @@ static inline bool task_is_traced(struct task_struct *task)
 
 	if (task->state & __TASK_TRACED)
 		return true;
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	/* in case the task is sleeping on tasklist_lock */
 	raw_spin_lock_irq(&task->pi_lock);
 	if (task->state & __TASK_TRACED)
@@ -1927,7 +1885,7 @@ static inline bool task_is_traced(struct task_struct *task)
  * value indicates whether a reschedule was done in fact.
  * cond_resched_lock() will drop the spinlock before scheduling,
  */
-#ifndef CONFIG_PREEMPT
+#ifndef CONFIG_PREEMPTION
 extern int _cond_resched(void);
 #else
 static inline int _cond_resched(void) { return 0; }
@@ -1956,12 +1914,12 @@ static inline void cond_resched_rcu(void)
 
 /*
  * Does a critical section need to be broken due to another
- * task waiting?: (technically does not depend on CONFIG_PREEMPT,
+ * task waiting?: (technically does not depend on CONFIG_PREEMPTION,
  * but a general need for low latency)
  */
 static inline int spin_needbreak(spinlock_t *lock)
 {
-#ifdef CONFIG_PREEMPT
+#ifdef CONFIG_PREEMPTION
 	return spin_is_contended(lock);
 #else
 	return 0;
@@ -1973,7 +1931,7 @@ static __always_inline bool need_resched(void)
 	return unlikely(tif_need_resched());
 }
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 static inline void sleeping_lock_inc(void)
 {
 	current->sleeping_lock++;

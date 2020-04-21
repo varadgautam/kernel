@@ -963,7 +963,7 @@ takeit:
 	return 1;
 }
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 /*
  * preemptible spin_lock functions:
  */
@@ -1168,7 +1168,7 @@ EXPORT_SYMBOL(rt_spin_lock_nested);
 void __lockfunc rt_spin_unlock(spinlock_t *lock)
 {
 	/* NOTE: we always pass in '1' for nested, for simplicity */
-	spin_release(&lock->dep_map, 1, _RET_IP_);
+	spin_release(&lock->dep_map, _RET_IP_);
 	rt_spin_lock_fastunlock(&lock->lock, rt_spin_lock_slowunlock);
 	migrate_enable();
 	rcu_read_unlock();
@@ -1258,9 +1258,9 @@ __rt_spin_lock_init(spinlock_t *lock, const char *name, struct lock_class_key *k
 }
 EXPORT_SYMBOL(__rt_spin_lock_init);
 
-#endif /* PREEMPT_RT_FULL */
+#endif /* PREEMPT_RT */
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	static inline int __sched
 __mutex_lock_check_stamp(struct rt_mutex *lock, struct ww_acquire_ctx *ctx)
 {
@@ -1671,7 +1671,7 @@ static __always_inline void ww_mutex_lock_acquired(struct ww_mutex *ww,
 	ww_ctx->acquired++;
 }
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 static void ww_mutex_account_lock(struct rt_mutex *lock,
 				  struct ww_acquire_ctx *ww_ctx)
 {
@@ -1715,7 +1715,7 @@ int __sched rt_mutex_slowlock_locked(struct rt_mutex *lock, int state,
 {
 	int ret;
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	if (ww_ctx) {
 		struct ww_mutex *ww;
 
@@ -2024,7 +2024,7 @@ static inline int __sched rt_mutex_lock_state(struct rt_mutex *lock,
 	mutex_acquire(&lock->dep_map, subclass, 0, _RET_IP_);
 	ret = __rt_mutex_lock_state(lock, state);
 	if (ret)
-		mutex_release(&lock->dep_map, 1, _RET_IP_);
+		mutex_release(&lock->dep_map, _RET_IP_);
 	return ret;
 }
 
@@ -2130,7 +2130,7 @@ rt_mutex_timed_lock(struct rt_mutex *lock, struct hrtimer_sleeper *timeout)
 				       NULL,
 				       rt_mutex_slowlock);
 	if (ret)
-		mutex_release(&lock->dep_map, 1, _RET_IP_);
+		mutex_release(&lock->dep_map, _RET_IP_);
 
 	return ret;
 }
@@ -2138,7 +2138,7 @@ EXPORT_SYMBOL_GPL(rt_mutex_timed_lock);
 
 int __sched __rt_mutex_trylock(struct rt_mutex *lock)
 {
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	if (WARN_ON_ONCE(in_irq() || in_nmi()))
 #else
 	if (WARN_ON_ONCE(in_irq() || in_nmi() || in_serving_softirq()))
@@ -2183,7 +2183,7 @@ void __sched __rt_mutex_unlock(struct rt_mutex *lock)
  */
 void __sched rt_mutex_unlock(struct rt_mutex *lock)
 {
-	mutex_release(&lock->dep_map, 1, _RET_IP_);
+	mutex_release(&lock->dep_map, _RET_IP_);
 	__rt_mutex_unlock(lock);
 }
 EXPORT_SYMBOL_GPL(rt_mutex_unlock);
@@ -2375,7 +2375,7 @@ int __rt_mutex_start_proxy_lock(struct rt_mutex *lock,
 	if (try_to_take_rt_mutex(lock, task, NULL))
 		return 1;
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 	/*
 	 * In PREEMPT_RT there's an added race.
 	 * If the task, that we are about to requeue, times out,
@@ -2602,7 +2602,7 @@ ww_mutex_deadlock_injection(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 	return 0;
 }
 
-#ifdef CONFIG_PREEMPT_RT_FULL
+#ifdef CONFIG_PREEMPT_RT
 int __sched
 ww_mutex_lock_interruptible(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 {
@@ -2615,7 +2615,7 @@ ww_mutex_lock_interruptible(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 	ret = rt_mutex_slowlock(&lock->base.lock, TASK_INTERRUPTIBLE, NULL, 0,
 				ctx);
 	if (ret)
-		mutex_release(&lock->base.dep_map, 1, _RET_IP_);
+		mutex_release(&lock->base.dep_map, _RET_IP_);
 	else if (!ret && ctx && ctx->acquired > 1)
 		return ww_mutex_deadlock_injection(lock, ctx);
 
@@ -2635,7 +2635,7 @@ ww_mutex_lock(struct ww_mutex *lock, struct ww_acquire_ctx *ctx)
 	ret = rt_mutex_slowlock(&lock->base.lock, TASK_UNINTERRUPTIBLE, NULL, 0,
 				ctx);
 	if (ret)
-		mutex_release(&lock->base.dep_map, 1, _RET_IP_);
+		mutex_release(&lock->base.dep_map, _RET_IP_);
 	else if (!ret && ctx && ctx->acquired > 1)
 		return ww_mutex_deadlock_injection(lock, ctx);
 
@@ -2660,7 +2660,7 @@ void __sched ww_mutex_unlock(struct ww_mutex *lock)
 		lock->ctx = NULL;
 	}
 
-	mutex_release(&lock->base.dep_map, nest, _RET_IP_);
+	mutex_release(&lock->base.dep_map, _RET_IP_);
 	__rt_mutex_unlock(&lock->base.lock);
 }
 EXPORT_SYMBOL(ww_mutex_unlock);

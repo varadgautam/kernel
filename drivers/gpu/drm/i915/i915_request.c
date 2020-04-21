@@ -205,14 +205,14 @@ static void remove_from_engine(struct i915_request *rq)
 	 * check that the rq still belongs to the newly locked engine.
 	 */
 	locked = READ_ONCE(rq->engine);
-	spin_lock(&locked->active.lock);
+	spin_lock_irq(&locked->active.lock);
 	while (unlikely(locked != (engine = READ_ONCE(rq->engine)))) {
 		spin_unlock(&locked->active.lock);
 		spin_lock(&engine->active.lock);
 		locked = engine;
 	}
 	list_del(&rq->sched.link);
-	spin_unlock(&locked->active.lock);
+	spin_unlock_irq(&locked->active.lock);
 }
 
 static bool i915_request_retire(struct i915_request *rq)
@@ -272,8 +272,6 @@ static bool i915_request_retire(struct i915_request *rq)
 		active->retire(active, rq);
 	}
 
-	local_irq_disable();
-
 	/*
 	 * We only loosely track inflight requests across preemption,
 	 * and so we may find ourselves attempting to retire a _completed_
@@ -282,7 +280,7 @@ static bool i915_request_retire(struct i915_request *rq)
 	 */
 	remove_from_engine(rq);
 
-	spin_lock(&rq->lock);
+	spin_lock_irq(&rq->lock);
 	i915_request_mark_complete(rq);
 	if (!i915_request_signaled(rq))
 		dma_fence_signal_locked(&rq->fence);
@@ -297,9 +295,7 @@ static bool i915_request_retire(struct i915_request *rq)
 		__notify_execute_cb(rq);
 	}
 	GEM_BUG_ON(!list_empty(&rq->execute_cb));
-	spin_unlock(&rq->lock);
-
-	local_irq_enable();
+	spin_unlock_irq(&rq->lock);
 
 	remove_from_client(rq);
 	list_del(&rq->link);
@@ -560,19 +556,31 @@ submit_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 	return NOTIFY_DONE;
 }
 
+static void irq_semaphore_cb(struct irq_work *wrk)
+{
+	struct i915_request *rq =
+		container_of(wrk, typeof(*rq), semaphore_work);
+
+	i915_schedule_bump_priority(rq, I915_PRIORITY_NOSEMAPHORE);
+	i915_request_put(rq);
+}
+
 static int __i915_sw_fence_call
 semaphore_notify(struct i915_sw_fence *fence, enum i915_sw_fence_notify state)
 {
-	struct i915_request *request =
-		container_of(fence, typeof(*request), semaphore);
+	struct i915_request *rq = container_of(fence, typeof(*rq), semaphore);
 
 	switch (state) {
 	case FENCE_COMPLETE:
-		i915_schedule_bump_priority(request, I915_PRIORITY_NOSEMAPHORE);
+		if (!(READ_ONCE(rq->sched.attr.priority) & I915_PRIORITY_NOSEMAPHORE)) {
+			i915_request_get(rq);
+			init_irq_work(&rq->semaphore_work, irq_semaphore_cb);
+			irq_work_queue(&rq->semaphore_work);
+		}
 		break;
 
 	case FENCE_FREE:
-		i915_request_put(request);
+		i915_request_put(rq);
 		break;
 	}
 
@@ -1215,9 +1223,9 @@ void __i915_request_queue(struct i915_request *rq,
 	 * decide whether to preempt the entire chain so that it is ready to
 	 * run at the earliest possible convenience.
 	 */
-	i915_sw_fence_commit(&rq->semaphore);
 	if (attr && rq->engine->schedule)
 		rq->engine->schedule(rq, attr);
+	i915_sw_fence_commit(&rq->semaphore);
 	i915_sw_fence_commit(&rq->submit);
 }
 
@@ -1495,7 +1503,7 @@ long i915_request_wait(struct i915_request *rq,
 	dma_fence_remove_callback(&rq->fence, &wait.cb);
 
 out:
-	mutex_release(&rq->engine->gt->reset.mutex.dep_map, 0, _THIS_IP_);
+	mutex_release(&rq->engine->gt->reset.mutex.dep_map, _THIS_IP_);
 	trace_i915_request_wait_end(rq);
 	return timeout;
 }
