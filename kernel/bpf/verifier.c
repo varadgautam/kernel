@@ -1921,6 +1921,15 @@ static bool register_is_const(struct bpf_reg_state *reg)
 	return reg->type == SCALAR_VALUE && tnum_is_const(reg->var_off);
 }
 
+static bool __is_pointer_value(bool allow_ptr_leaks,
+			       const struct bpf_reg_state *reg)
+{
+	if (allow_ptr_leaks)
+		return false;
+
+	return reg->type != SCALAR_VALUE;
+}
+
 static void save_register_state(struct bpf_func_state *state,
 				int spi, struct bpf_reg_state *reg)
 {
@@ -2111,6 +2120,16 @@ static int check_stack_read(struct bpf_verifier_env *env,
 			 * which resets stack/reg liveness for state transitions
 			 */
 			state->regs[value_regno].live |= REG_LIVE_WRITTEN;
+		} else if (__is_pointer_value(env->allow_ptr_leaks, reg)) {
+			/* If value_regno==-1, the caller is asking us whether
+			 * it is acceptable to use this value as a SCALAR_VALUE
+			 * (e.g. for XADD).
+			 * We must not allow unprivileged callers to do that
+			 * with spilled pointers.
+			 */
+			verbose(env, "leaking pointer from stack off %d\n",
+				off);
+			return -EACCES;
 		}
 		mark_reg_read(env, reg, reg->parent, REG_LIVE_READ64);
 	} else {
@@ -2474,15 +2493,6 @@ static int check_sock_access(struct bpf_verifier_env *env, int insn_idx,
 		regno, reg_type_str[reg->type], off, size);
 
 	return -EACCES;
-}
-
-static bool __is_pointer_value(bool allow_ptr_leaks,
-			       const struct bpf_reg_state *reg)
-{
-	if (allow_ptr_leaks)
-		return false;
-
-	return reg->type != SCALAR_VALUE;
 }
 
 static struct bpf_reg_state *reg_state(struct bpf_verifier_env *env, int regno)
@@ -2870,6 +2880,9 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	ret = btf_struct_access(&env->log, t, off, size, atype, &btf_id);
 	if (ret < 0)
 		return ret;
+
+	if (value_regno < 0)
+		return 0;
 
 	if (ret == SCALAR_VALUE) {
 		mark_reg_unknown(env, regs, value_regno);
@@ -8070,26 +8083,48 @@ static bool is_tracing_prog_type(enum bpf_prog_type type)
 	}
 }
 
+static bool is_preallocated_map(struct bpf_map *map)
+{
+	if (!check_map_prealloc(map))
+		return false;
+	if (map->inner_map_meta && !check_map_prealloc(map->inner_map_meta))
+		return false;
+	return true;
+}
+
 static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 					struct bpf_map *map,
 					struct bpf_prog *prog)
 
 {
-	/* Make sure that BPF_PROG_TYPE_PERF_EVENT programs only use
-	 * preallocated hash maps, since doing memory allocation
-	 * in overflow_handler can crash depending on where nmi got
-	 * triggered.
+	/*
+	 * Validate that trace type programs use preallocated hash maps.
+	 *
+	 * For programs attached to PERF events this is mandatory as the
+	 * perf NMI can hit any arbitrary code sequence.
+	 *
+	 * All other trace types using preallocated hash maps are unsafe as
+	 * well because tracepoint or kprobes can be inside locked regions
+	 * of the memory allocator or at a place where a recursion into the
+	 * memory allocator would see inconsistent state.
+	 *
+	 * On RT enabled kernels run-time allocation of all trace type
+	 * programs is strictly prohibited due to lock type constraints. On
+	 * !RT kernels it is allowed for backwards compatibility reasons for
+	 * now, but warnings are emitted so developers are made aware of
+	 * the unsafety and can fix their programs before this is enforced.
 	 */
-	if (prog->type == BPF_PROG_TYPE_PERF_EVENT) {
-		if (!check_map_prealloc(map)) {
+	if (is_tracing_prog_type(prog->type) && !is_preallocated_map(map)) {
+		if (prog->type == BPF_PROG_TYPE_PERF_EVENT) {
 			verbose(env, "perf_event programs can only use preallocated hash map\n");
 			return -EINVAL;
 		}
-		if (map->inner_map_meta &&
-		    !check_map_prealloc(map->inner_map_meta)) {
-			verbose(env, "perf_event programs can only use preallocated inner hash map\n");
+		if (IS_ENABLED(CONFIG_PREEMPT_RT)) {
+			verbose(env, "trace type programs can only use preallocated hash map\n");
 			return -EINVAL;
 		}
+		WARN_ONCE(1, "trace type BPF program uses run-time allocation\n");
+		verbose(env, "trace type programs with run-time allocated hash maps are unsafe. Switch to preallocated hash maps.\n");
 	}
 
 	if ((is_tracing_prog_type(prog->type) ||

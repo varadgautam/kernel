@@ -470,11 +470,69 @@ struct bpf_trampoline {
 	void *image;
 	u64 selector;
 };
+
+#define BPF_DISPATCHER_MAX 64 /* Fits in 2048B */
+
+struct bpf_dispatcher_prog {
+	struct bpf_prog *prog;
+	refcount_t users;
+};
+
+struct bpf_dispatcher {
+	/* dispatcher mutex */
+	struct mutex mutex;
+	void *func;
+	struct bpf_dispatcher_prog progs[BPF_DISPATCHER_MAX];
+	int num_progs;
+	void *image;
+	u32 image_off;
+};
+
+static __always_inline unsigned int bpf_dispatcher_nopfunc(
+	const void *ctx,
+	const struct bpf_insn *insnsi,
+	unsigned int (*bpf_func)(const void *,
+				 const struct bpf_insn *))
+{
+	return bpf_func(ctx, insnsi);
+}
 #ifdef CONFIG_BPF_JIT
 struct bpf_trampoline *bpf_trampoline_lookup(u64 key);
 int bpf_trampoline_link_prog(struct bpf_prog *prog);
 int bpf_trampoline_unlink_prog(struct bpf_prog *prog);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
+void *bpf_jit_alloc_exec_page(void);
+#define BPF_DISPATCHER_INIT(name) {			\
+	.mutex = __MUTEX_INITIALIZER(name.mutex),	\
+	.func = &name##func,				\
+	.progs = {},					\
+	.num_progs = 0,					\
+	.image = NULL,					\
+	.image_off = 0					\
+}
+
+#define DEFINE_BPF_DISPATCHER(name)					\
+	noinline unsigned int name##func(				\
+		const void *ctx,					\
+		const struct bpf_insn *insnsi,				\
+		unsigned int (*bpf_func)(const void *,			\
+					 const struct bpf_insn *))	\
+	{								\
+		return bpf_func(ctx, insnsi);				\
+	}								\
+	EXPORT_SYMBOL(name##func);			\
+	struct bpf_dispatcher name = BPF_DISPATCHER_INIT(name);
+#define DECLARE_BPF_DISPATCHER(name)					\
+	unsigned int name##func(					\
+		const void *ctx,					\
+		const struct bpf_insn *insnsi,				\
+		unsigned int (*bpf_func)(const void *,			\
+					 const struct bpf_insn *));	\
+	extern struct bpf_dispatcher name;
+#define BPF_DISPATCHER_FUNC(name) name##func
+#define BPF_DISPATCHER_PTR(name) (&name)
+void bpf_dispatcher_change_prog(struct bpf_dispatcher *d, struct bpf_prog *from,
+				struct bpf_prog *to);
 #else
 static inline struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
@@ -489,6 +547,13 @@ static inline int bpf_trampoline_unlink_prog(struct bpf_prog *prog)
 	return -ENOTSUPP;
 }
 static inline void bpf_trampoline_put(struct bpf_trampoline *tr) {}
+#define DEFINE_BPF_DISPATCHER(name)
+#define DECLARE_BPF_DISPATCHER(name)
+#define BPF_DISPATCHER_FUNC(name) bpf_dispatcher_nopfunc
+#define BPF_DISPATCHER_PTR(name) NULL
+static inline void bpf_dispatcher_change_prog(struct bpf_dispatcher *d,
+					      struct bpf_prog *from,
+					      struct bpf_prog *to) {}
 #endif
 
 struct bpf_func_info_aux {
@@ -715,7 +780,7 @@ int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 		struct bpf_prog *_prog;			\
 		struct bpf_prog_array *_array;		\
 		u32 _ret = 1;				\
-		preempt_disable();			\
+		migrate_disable();			\
 		rcu_read_lock();			\
 		_array = rcu_dereference(array);	\
 		if (unlikely(check_non_null && !_array))\
@@ -728,7 +793,7 @@ int bpf_prog_array_copy(struct bpf_prog_array *old_array,
 		}					\
 _out:							\
 		rcu_read_unlock();			\
-		preempt_enable();			\
+		migrate_enable();			\
 		_ret;					\
 	 })
 
@@ -762,7 +827,7 @@ _out:							\
 		u32 ret;				\
 		u32 _ret = 1;				\
 		u32 _cn = 0;				\
-		preempt_disable();			\
+		migrate_disable();			\
 		rcu_read_lock();			\
 		_array = rcu_dereference(array);	\
 		_item = &_array->items[0];		\
@@ -774,7 +839,7 @@ _out:							\
 			_item++;			\
 		}					\
 		rcu_read_unlock();			\
-		preempt_enable();			\
+		migrate_enable();			\
 		if (_ret)				\
 			_ret = (_cn ? NET_XMIT_CN : NET_XMIT_SUCCESS);	\
 		else					\
@@ -790,6 +855,36 @@ _out:							\
 
 #ifdef CONFIG_BPF_SYSCALL
 DECLARE_PER_CPU(int, bpf_prog_active);
+
+/*
+ * Block execution of BPF programs attached to instrumentation (perf,
+ * kprobes, tracepoints) to prevent deadlocks on map operations as any of
+ * these events can happen inside a region which holds a map bucket lock
+ * and can deadlock on it.
+ *
+ * Use the preemption safe inc/dec variants on RT because migrate disable
+ * is preemptible on RT and preemption in the middle of the RMW operation
+ * might lead to inconsistent state. Use the raw variants for non RT
+ * kernels as migrate_disable() maps to preempt_disable() so the slightly
+ * more expensive save operation can be avoided.
+ */
+static inline void bpf_disable_instrumentation(void)
+{
+	migrate_disable();
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		this_cpu_inc(bpf_prog_active);
+	else
+		__this_cpu_inc(bpf_prog_active);
+}
+
+static inline void bpf_enable_instrumentation(void)
+{
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		this_cpu_dec(bpf_prog_active);
+	else
+		__this_cpu_dec(bpf_prog_active);
+	migrate_enable();
+}
 
 extern const struct file_operations bpf_map_fops;
 extern const struct file_operations bpf_prog_fops;
@@ -942,6 +1037,8 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 
 int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog);
 
+struct bpf_prog *bpf_prog_by_id(u32 id);
+
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -1072,6 +1169,11 @@ static inline int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 
 static inline void bpf_map_put(struct bpf_map *map)
 {
+}
+
+static inline struct bpf_prog *bpf_prog_by_id(u32 id)
+{
+	return ERR_PTR(-ENOTSUPP);
 }
 #endif /* CONFIG_BPF_SYSCALL */
 
