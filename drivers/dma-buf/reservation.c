@@ -110,13 +110,15 @@ int reservation_object_reserve_shared(struct reservation_object *obj,
 	new->shared_count = j;
 	new->shared_max = max;
 
-	write_seqlock(&obj->seq);
+	preempt_disable();
+	write_seqcount_begin(&obj->seq);
 	/*
 	 * RCU_INIT_POINTER can be used here,
 	 * seqcount provides the necessary barriers
 	 */
 	RCU_INIT_POINTER(obj->fence, new);
-	write_sequnlock(&obj->seq);
+	write_seqcount_end(&obj->seq);
+	preempt_enable();
 
 	if (!old)
 		return 0;
@@ -156,7 +158,8 @@ void reservation_object_add_shared_fence(struct reservation_object *obj,
 	fobj = reservation_object_get_list(obj);
 	count = fobj->shared_count;
 
-	write_seqlock(&obj->seq);
+	preempt_disable();
+	write_seqcount_begin(&obj->seq);
 
 	for (i = 0; i < count; ++i) {
 		struct dma_fence *old_fence;
@@ -178,7 +181,8 @@ replace:
 	/* pointer update must be visible before we extend the shared_count */
 	smp_store_mb(fobj->shared_count, count);
 
-	write_sequnlock(&obj->seq);
+	write_seqcount_end(&obj->seq);
+	preempt_enable();
 }
 EXPORT_SYMBOL(reservation_object_add_shared_fence);
 
@@ -205,11 +209,14 @@ void reservation_object_add_excl_fence(struct reservation_object *obj,
 	if (fence)
 		dma_fence_get(fence);
 
-	write_seqlock(&obj->seq);
+	preempt_disable();
+	write_seqcount_begin(&obj->seq);
+	/* write_seqcount_begin provides the necessary memory barrier */
 	RCU_INIT_POINTER(obj->fence_excl, fence);
 	if (old)
 		old->shared_count = 0;
-	write_sequnlock(&obj->seq);
+	write_seqcount_end(&obj->seq);
+	preempt_enable();
 
 	/* inplace update, no shared fences */
 	while (i--)
@@ -291,10 +298,13 @@ retry:
 	src_list = reservation_object_get_list(dst);
 	old = reservation_object_get_excl(dst);
 
-	write_seqlock(&dst->seq);
+	preempt_disable();
+	write_seqcount_begin(&dst->seq);
+	/* write_seqcount_begin provides the necessary memory barrier */
 	RCU_INIT_POINTER(dst->fence_excl, new);
 	RCU_INIT_POINTER(dst->fence, dst_list);
-	write_sequnlock(&dst->seq);
+	write_seqcount_end(&dst->seq);
+	preempt_enable();
 
 	if (src_list)
 		kfree_rcu(src_list, rcu);
@@ -335,7 +345,7 @@ int reservation_object_get_fences_rcu(struct reservation_object *obj,
 		shared_count = i = 0;
 
 		rcu_read_lock();
-		seq = read_seqbegin(&obj->seq);
+		seq = read_seqcount_begin(&obj->seq);
 
 		fence_excl = rcu_dereference(obj->fence_excl);
 		if (fence_excl && !dma_fence_get_rcu(fence_excl))
@@ -384,7 +394,7 @@ int reservation_object_get_fences_rcu(struct reservation_object *obj,
 			}
 		}
 
-		if (i != shared_count || read_seqretry(&obj->seq, seq)) {
+		if (i != shared_count || read_seqcount_retry(&obj->seq, seq)) {
 			while (i--)
 				dma_fence_put(shared[i]);
 			dma_fence_put(fence_excl);
@@ -433,7 +443,7 @@ long reservation_object_wait_timeout_rcu(struct reservation_object *obj,
 
 retry:
 	shared_count = 0;
-	seq = read_seqbegin(&obj->seq);
+	seq = read_seqcount_begin(&obj->seq);
 	rcu_read_lock();
 	i = -1;
 
@@ -480,7 +490,7 @@ retry:
 
 	rcu_read_unlock();
 	if (fence) {
-		if (read_seqretry(&obj->seq, seq)) {
+		if (read_seqcount_retry(&obj->seq, seq)) {
 			dma_fence_put(fence);
 			goto retry;
 		}
@@ -536,7 +546,7 @@ bool reservation_object_test_signaled_rcu(struct reservation_object *obj,
 retry:
 	ret = true;
 	shared_count = 0;
-	seq = read_seqbegin(&obj->seq);
+	seq = read_seqcount_begin(&obj->seq);
 
 	if (test_all) {
 		unsigned i;
@@ -557,7 +567,7 @@ retry:
 				break;
 		}
 
-		if (read_seqretry(&obj->seq, seq))
+		if (read_seqcount_retry(&obj->seq, seq))
 			goto retry;
 	}
 
@@ -570,7 +580,7 @@ retry:
 			if (ret < 0)
 				goto retry;
 
-			if (read_seqretry(&obj->seq, seq))
+			if (read_seqcount_retry(&obj->seq, seq))
 				goto retry;
 		}
 	}
