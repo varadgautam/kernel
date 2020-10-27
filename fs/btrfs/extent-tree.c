@@ -2928,7 +2928,7 @@ int btrfs_finish_extent_commit(struct btrfs_trans_handle *trans)
 						   &trimmed);
 
 		list_del_init(&block_group->bg_list);
-		btrfs_put_block_group_trimming(block_group);
+		btrfs_unfreeze_block_group(block_group);
 		btrfs_put_block_group(block_group);
 
 		if (ret) {
@@ -5365,13 +5365,10 @@ int btrfs_drop_snapshot(struct btrfs_root *root, int update_ref, int for_reloc)
 		}
 	}
 
-	if (test_bit(BTRFS_ROOT_IN_RADIX, &root->state)) {
+	if (test_bit(BTRFS_ROOT_IN_RADIX, &root->state))
 		btrfs_add_dropped_root(trans, root);
-	} else {
-		free_extent_buffer(root->node);
-		free_extent_buffer(root->commit_root);
+	else
 		btrfs_put_root(root);
-	}
 	root_dropped = true;
 out_end_trans:
 	btrfs_end_transaction_throttle(trans);

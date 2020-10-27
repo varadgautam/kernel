@@ -69,7 +69,7 @@ void btrfs_put_transaction(struct btrfs_transaction *transaction)
 						 struct btrfs_block_group,
 						 bg_list);
 			list_del_init(&cache->bg_list);
-			btrfs_put_block_group_trimming(cache);
+			btrfs_unfreeze_block_group(cache);
 			btrfs_put_block_group(cache);
 		}
 		WARN_ON(!list_empty(&transaction->dev_update_list));
@@ -1183,8 +1183,10 @@ void btrfs_add_dead_root(struct btrfs_root *root)
 	struct btrfs_fs_info *fs_info = root->fs_info;
 
 	spin_lock(&fs_info->trans_lock);
-	if (list_empty(&root->root_list))
+	if (list_empty(&root->root_list)) {
+		btrfs_grab_root(root);
 		list_add_tail(&root->root_list, &fs_info->dead_roots);
+	}
 	spin_unlock(&fs_info->trans_lock);
 }
 
@@ -2344,6 +2346,10 @@ int btrfs_clean_one_deleted_snapshot(struct btrfs_root *root)
 	btrfs_debug(fs_info, "cleaner removing %llu", root->root_key.objectid);
 
 	btrfs_kill_all_delayed_nodes(root);
+	if (root->ino_cache_inode) {
+		iput(root->ino_cache_inode);
+		root->ino_cache_inode = NULL;
+	}
 
 	if (btrfs_header_backref_rev(root->node) <
 			BTRFS_MIXED_BACKREF_REV)
@@ -2351,6 +2357,7 @@ int btrfs_clean_one_deleted_snapshot(struct btrfs_root *root)
 	else
 		ret = btrfs_drop_snapshot(root, 1, 0);
 
+	btrfs_put_root(root);
 	return (ret < 0) ? 0 : 1;
 }
 
