@@ -803,7 +803,7 @@ u32 svcauth_gss_flavor(struct auth_domain *dom)
 
 EXPORT_SYMBOL_GPL(svcauth_gss_flavor);
 
-int
+struct auth_domain *
 svcauth_gss_register_pseudoflavor(u32 pseudoflavor, char * name)
 {
 	struct gss_domain	*new;
@@ -828,14 +828,14 @@ svcauth_gss_register_pseudoflavor(u32 pseudoflavor, char * name)
 		auth_domain_put(test);
 		goto out_free_name;
 	}
-	return 0;
+	return test;
 
 out_free_name:
 	kfree(new->h.name);
 out_free_dom:
 	kfree(new);
 out:
-	return stat;
+	return ERR_PTR(stat);
 }
 EXPORT_SYMBOL_GPL(svcauth_gss_register_pseudoflavor);
 
@@ -902,7 +902,7 @@ unwrap_integ_data(struct svc_rqst *rqstp, struct xdr_buf *buf, u32 seq, struct g
 	if (svc_getnl(&buf->head[0]) != seq)
 		goto out;
 	/* trim off the mic and padding at the end before returning */
-	xdr_buf_trim(buf, round_up_to_quad(mic.len) + 4);
+	buf->len -= 4 + round_up_to_quad(mic.len);
 	stat = 0;
 out:
 	kfree(mic.data);

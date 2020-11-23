@@ -1603,8 +1603,6 @@ static void l2cap_sock_init(struct sock *sk, struct sock *parent)
 
 	chan->data = sk;
 	chan->ops = &l2cap_chan_ops;
-	/* XXX: a special flag for SLE15-SP2 kABI workaround */
-	set_bit(FLAG_CHAN_OPS_SK_FILTER, &chan->flags);
 }
 
 static struct proto l2cap_proto = {

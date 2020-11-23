@@ -1938,8 +1938,6 @@ lookup_again:
 			trace_pnfs_update_layout(ino, pos, count,
 					iomode, lo, lseg,
 					PNFS_UPDATE_LAYOUT_INVALID_OPEN);
-			if (status != -EAGAIN)
-				goto out_unlock;
 			spin_unlock(&ino->i_lock);
 			nfs4_schedule_stateid_recovery(server, ctx->state);
 			pnfs_clear_first_layoutget(lo);
@@ -2736,7 +2734,7 @@ pnfs_try_to_read_data(struct nfs_pgio_header *hdr,
 }
 
 /* Resend all requests through pnfs. */
-void pnfs_read_resend_pnfs2(struct nfs_pgio_header *hdr,
+void pnfs_read_resend_pnfs(struct nfs_pgio_header *hdr,
 			   unsigned int mirror_idx)
 {
 	struct nfs_pageio_descriptor pgio;
@@ -2751,12 +2749,6 @@ void pnfs_read_resend_pnfs2(struct nfs_pgio_header *hdr,
 		pgio.pg_mirror_idx = mirror_idx;
 		hdr->task.tk_status = nfs_pageio_resend(&pgio, hdr);
 	}
-}
-EXPORT_SYMBOL_GPL(pnfs_read_resend_pnfs2);
-
-void pnfs_read_resend_pnfs(struct nfs_pgio_header *hdr)
-{
-	pnfs_read_resend_pnfs2(hdr, 0);
 }
 EXPORT_SYMBOL_GPL(pnfs_read_resend_pnfs);
 
