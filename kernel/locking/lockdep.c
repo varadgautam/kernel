@@ -5358,3 +5358,11 @@ void lockdep_rcu_suspicious(const char *file, const int line, const char *s)
 	dump_stack();
 }
 EXPORT_SYMBOL_GPL(lockdep_rcu_suspicious);
+
+void lockdep_assert_preemption_disabled(void)
+{	WARN_ON_ONCE(IS_ENABLED(CONFIG_PREEMPT_COUNT)	&&
+		     debug_locks			&&
+		     (preempt_count() == 0		&&
+		      current->hardirqs_enabled));
+}
+EXPORT_SYMBOL_GPL(lockdep_assert_preemption_disabled);
