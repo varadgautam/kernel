@@ -498,17 +498,10 @@ do {									\
 	WARN_ON_ONCE(IS_ENABLED(CONFIG_PREEMPT_COUNT)	&&		\
 		     debug_locks			&&		\
 		     (preempt_count() != 0		||		\
-		      !this_cpu_read(hardirqs_enabled)));		\
+		      !current->hardirqs_enabled));			\
 } while (0)
 
-#define lockdep_assert_preemption_disabled()				\
-do {									\
-	WARN_ON_ONCE(IS_ENABLED(CONFIG_PREEMPT_COUNT)	&&		\
-		     debug_locks			&&		\
-		     (preempt_count() == 0		&&		\
-		      this_cpu_read(hardirqs_enabled)));		\
-} while (0)
-
+extern void lockdep_assert_preemption_disabled(void);
 #else
 # define might_lock(lock) do { } while (0)
 # define might_lock_read(lock) do { } while (0)
